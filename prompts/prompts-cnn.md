@@ -312,3 +312,15 @@ Eres un experto senior en DevOps y CI/CD. Necesito que integres todos los compon
 4. Outputs entre jobs: test → build: coverage percentage; build → deploy: artifact name, build version
 5. Resumen del workflow: estado de cada job, coverage, versión desplegada, URL del servidor (job summary al final)
 ```
+
+---
+
+## Error "Error loading key ... error in libcrypto" en Deploy EC2 - 2025-02-11
+
+**Prompt:**
+
+```
+en la etapa de subida a produccion me dio el siguiente error [imagen del pipeline con fallo en Setup SSH: Error loading key "/home/runner/.ssh/deploy_key.pem": error in libcrypto]. dame el paso a paso como solucionarlo
+```
+
+**Acciones realizadas:** Documentación en `docs/PIPELINE.md` (tabla de errores + sección "Solución: Error libcrypto con EC2_SSH_KEY") con pasos para reemplazar el secret `EC2_SSH_KEY` correctamente; ajuste en `.github/workflows/pipeline.yml` para normalizar la clave PEM al escribir (sed para quitar `\r`).

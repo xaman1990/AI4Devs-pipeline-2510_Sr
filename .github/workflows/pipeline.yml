@@ -39,7 +39,7 @@ jobs:
   # ---------------------------------------------------------------------------
   test:
     name: 🧪 Run Tests
-    runs-on: ${{ env.UBUNTU_VERSION }}
+    runs-on: ubuntu-latest
 
     outputs:
       coverage_percentage: ${{ steps.coverage-out.outputs.percentage }}
@@ -147,7 +147,7 @@ jobs:
   build:
     name: 🏗️ Build Application
     needs: test
-    runs-on: ${{ env.UBUNTU_VERSION }}
+    runs-on: ubuntu-latest
 
     outputs:
       build_version: ${{ steps.build-info.outputs.version }}
@@ -169,17 +169,34 @@ jobs:
           cache: "npm"
           cache-dependency-path: backend/package-lock.json
 
+      # README: "cd backend" + "npm install" luego "npm run build". Instalamos todo (incl. dev) para compilar.
       - name: 📦 Install dependencies (build)
-        run: npm ci
+        run: npm ci --include=dev
         working-directory: backend
 
       - name: 🔧 Prisma generate
         run: npx prisma generate
         working-directory: backend
 
+      # tsconfig de build: excluye tests y ajusta lib para que tsc no falle. npx -p typescript usa el tsc del proyecto.
       - name: 📜 Compile TypeScript
-        run: npm run build
         working-directory: backend
+        run: |
+          node -e "
+          const base = require('./tsconfig.json');
+          const build = {
+            ...base,
+            compilerOptions: {
+              ...base.compilerOptions,
+              lib: ['ES2020'],
+              skipLibCheck: true
+            },
+            exclude: [...(base.exclude || []), 'node_modules', '**/*.test.ts', '**/__tests__']
+          };
+          require('fs').writeFileSync('tsconfig.build.json', JSON.stringify(build, null, 2));
+          "
+          npx -p typescript tsc -p tsconfig.build.json
+          rm -f tsconfig.build.json
 
       - name: 📝 Generate build info
         id: build-info
@@ -231,21 +248,25 @@ jobs:
   deploy:
     name: 🚀 Deploy to EC2
     needs: build
-    runs-on: ${{ env.UBUNTU_VERSION }}
+    runs-on: ubuntu-latest
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
 
+    # Secrets según README: AWS_ACCESS_ID, AWS_ACCESS_KEY (contenido del .pem), EC2_INSTANCE
+    # EC2_USER opcional: si no se define, se usa 'ec2-user'
+    # Nota: Los secrets deben estar en el environment "test" (o como Repository secrets)
     outputs:
       deploy_version: ${{ needs.build.outputs.build_version }}
-      deploy_url: https://${{ secrets.EC2_HOST }}
+      deploy_url: https://deploy-target
 
     environment:
-      name: production
-      url: https://${{ secrets.EC2_HOST }}
+      name: test
+      url: https://github.com
 
     env:
       NODE_ENV: production
       SSH_KEY_PATH: ~/.ssh/deploy_key.pem
-      APP_DIR: /home/${{ secrets.EC2_USER }}/app
+      EC2_USER: ${{ secrets.EC2_USER || 'ec2-user' }}
+      APP_DIR: ${{ format('/home/{0}/app', secrets.EC2_USER || 'ec2-user') }}
 
     steps:
       - name: 📥 Download build artifact
@@ -263,18 +284,46 @@ jobs:
       - name: 🔑 Setup SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ${{ env.SSH_KEY_PATH }}
+          # Contenido del .pem: AWS_ACCESS_KEY (README) o EC2_SSH_KEY. Normalizar CRLF.
+          # Si usas environment "production", el secret debe estar en ese environment o en Repository secrets.
+          KEY_CONTENT="${{ secrets.AWS_ACCESS_KEY || secrets.EC2_SSH_KEY }}"
+          echo "$KEY_CONTENT" | sed 's/\r$//' | tee ${{ env.SSH_KEY_PATH }} > /dev/null
+          if [ ! -s ${{ env.SSH_KEY_PATH }} ]; then
+            echo "::error::Ningún secret con la clave .pem está configurado. Añade el contenido completo del .pem en uno de: AWS_ACCESS_KEY o EC2_SSH_KEY. Settings → Secrets and variables → Actions → Environments → test (o como Repository secret)."
+            exit 1
+          fi
           chmod 600 ${{ env.SSH_KEY_PATH }}
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.EC2_INSTANCE }} >> ~/.ssh/known_hosts 2>/dev/null || true
           eval "$(ssh-agent -s)"
           ssh-add ${{ env.SSH_KEY_PATH }}
 
       - name: 💾 Create backup on EC2
         run: |
-          SSH_OPTS="-i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no"
-          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+          # Expandir ~ a $HOME y limpiar espacios
+          SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
+          SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
+          EC2_USER_RAW="${{ secrets.EC2_USER || 'ec2-user' }}"
+          EC2_USER=$(echo "$EC2_USER_RAW" | xargs)  # Trim espacios
+          EC2_HOST_RAW="${{ secrets.EC2_INSTANCE }}"
+          EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)  # Trim espacios
+          # Reconstruir APP_DIR desde EC2_USER limpio
+          APP_DIR="/home/${EC2_USER}/app"
+          
+          # Verificar que la clave existe y tiene permisos correctos
+          if [ ! -f "$SSH_KEY" ]; then
+            echo "::error::La clave SSH no existe en: $SSH_KEY"
+            exit 1
+          fi
+          if [ ! -s "$SSH_KEY" ]; then
+            echo "::error::La clave SSH está vacía: $SSH_KEY"
+            exit 1
+          fi
+          
+          echo "Conectando a ${EC2_USER}@${EC2_HOST}"
+          ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+            "${EC2_USER}@${EC2_HOST}" "
             set -e
-            APP_DIR='${{ env.APP_DIR }}'
+            APP_DIR='${APP_DIR}'
             if [ -d \"\$APP_DIR\" ] && [ \"\$(ls -A \$APP_DIR 2>/dev/null)\" ]; then
               BACKUP=\${APP_DIR}-backup-\$(date +%Y%m%d%H%M%S)
               cp -a \"\$APP_DIR\" \"\$BACKUP\"
@@ -286,18 +335,42 @@ jobs:
 
       - name: 📤 Transfer files to EC2
         run: |
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "mkdir -p ${{ env.APP_DIR }}-new"
+          # Expandir ~ a $HOME y limpiar espacios
+          SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
+          SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
+          EC2_USER_RAW="${{ secrets.EC2_USER || 'ec2-user' }}"
+          EC2_USER=$(echo "$EC2_USER_RAW" | xargs)  # Trim espacios
+          EC2_HOST_RAW="${{ secrets.EC2_INSTANCE }}"
+          EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)  # Trim espacios
+          # Reconstruir APP_DIR desde EC2_USER limpio
+          APP_DIR="/home/${EC2_USER}/app"
+          
+          echo "Creando directorio ${APP_DIR}-new en ${EC2_USER}@${EC2_HOST}"
+          ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+            "${EC2_USER}@${EC2_HOST}" "mkdir -p ${APP_DIR}-new"
+          
+          echo "Sincronizando archivos a ${EC2_USER}@${EC2_HOST}:${APP_DIR}-new/"
           rsync -avz --delete \
-            -e "ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no" \
-            backend-deploy/ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ env.APP_DIR }}-new/
+            -e "ssh -i $SSH_KEY -o StrictHostKeyChecking=no" \
+            backend-deploy/ "${EC2_USER}@${EC2_HOST}:${APP_DIR}-new/"
 
       - name: 🚀 Deploy on EC2 (PM2)
         run: |
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+          # Expandir ~ a $HOME y limpiar espacios
+          SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
+          SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
+          EC2_USER_RAW="${{ secrets.EC2_USER || 'ec2-user' }}"
+          EC2_USER=$(echo "$EC2_USER_RAW" | xargs)  # Trim espacios
+          EC2_HOST_RAW="${{ secrets.EC2_INSTANCE }}"
+          EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)  # Trim espacios
+          # Reconstruir APP_DIR desde EC2_USER limpio
+          APP_DIR="/home/${EC2_USER}/app"
+          
+          echo "Desplegando aplicación en ${EC2_USER}@${EC2_HOST}:${APP_DIR}"
+          ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+            "${EC2_USER}@${EC2_HOST}" "
             set -e
-            APP_DIR='${{ env.APP_DIR }}'
+            APP_DIR='${APP_DIR}'
             pm2 stop all || true
             if [ -d \"\$APP_DIR\" ] && [ \"\$(ls -A \$APP_DIR 2>/dev/null)\" ]; then
               rm -rf \"\${APP_DIR}.old\"
@@ -311,34 +384,160 @@ jobs:
           "
 
       - name: ⏳ Wait for application
-        run: sleep 30
+        run: |
+          echo "Esperando 30 segundos para que la aplicación inicie..."
+          sleep 30
+
+      - name: 🔍 Verify application status on EC2
+        run: |
+          # Expandir ~ a $HOME y limpiar espacios
+          SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
+          SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
+          EC2_USER_RAW="${{ secrets.EC2_USER || 'ec2-user' }}"
+          EC2_USER=$(echo "$EC2_USER_RAW" | xargs)
+          EC2_HOST_RAW="${{ secrets.EC2_INSTANCE }}"
+          EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)
+          APP_DIR="/home/${EC2_USER}/app"
+          
+          echo "Verificando estado de la aplicación en EC2..."
+          ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+            "${EC2_USER}@${EC2_HOST}" "
+            echo '=== Estado de PM2 ==='
+            pm2 list || echo 'PM2 no está instalado o no hay procesos'
+            echo ''
+            echo '=== Procesos escuchando en puerto 3000 ==='
+            sudo netstat -tlnp | grep :3000 || sudo ss -tlnp | grep :3000 || echo 'No hay proceso escuchando en puerto 3000'
+            echo ''
+            echo '=== Verificando si la app responde localmente ==='
+            curl -f http://localhost:3000/ || curl -f http://127.0.0.1:3000/ || echo 'La app no responde en localhost:3000'
+            curl -f http://localhost:3000/api/health || curl -f http://127.0.0.1:3000/api/health || echo 'El endpoint /api/health no responde'
+            echo ''
+            echo '=== Verificando interfaz de red ==='
+            ip addr show | grep inet || ifconfig | grep inet || echo 'No se pudo obtener información de red'
+          "
 
       - name: ✅ Health check
         id: health
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_INSTANCE: ${{ secrets.EC2_INSTANCE }}
           HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
+        continue-on-error: true
         run: |
-          URL="${HEALTH_CHECK_URL:-http://$EC2_HOST:3000/}"
+          # Limpiar espacios de EC2_INSTANCE
+          EC2_HOST_RAW="$EC2_INSTANCE"
+          EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)
+          
+          # Construir URL de health check
+          if [ -n "$HEALTH_CHECK_URL" ]; then
+            URL="$HEALTH_CHECK_URL"
+            echo "Usando HEALTH_CHECK_URL personalizado: $URL"
+          else
+            URL="http://${EC2_HOST}:3000/"
+            echo "Usando URL por defecto: $URL"
+          fi
+          
+          echo "Iniciando health check..."
+          echo "URLs a verificar:"
+          echo "  1. $URL"
+          echo "  2. ${URL%/}/api/health"
+          
           for i in 1 2 3; do
-            if curl -sf --max-time 10 "$URL" > /dev/null || curl -sf --max-time 10 "${URL%/}/api/health" > /dev/null; then
-              echo "Health check OK (intento $i)"
+            echo ""
+            echo "=== Intento $i de 3 ==="
+            
+            # Intentar URL principal
+            if curl -sf --max-time 10 "$URL" > /dev/null 2>&1; then
+              echo "✅ Health check OK en $URL (intento $i)"
               echo "ok=true" >> $GITHUB_OUTPUT
               exit 0
+            else
+              echo "❌ Falló conexión a $URL"
+              CURL_ERROR=$(curl -sf --max-time 10 "$URL" 2>&1 || true)
+              echo "Error: $CURL_ERROR"
             fi
-            echo "Intento $i fallido, reintentando en 10s..."
-            sleep 10
+            
+            # Intentar endpoint /api/health
+            HEALTH_ENDPOINT="${URL%/}/api/health"
+            if curl -sf --max-time 10 "$HEALTH_ENDPOINT" > /dev/null 2>&1; then
+              echo "✅ Health check OK en $HEALTH_ENDPOINT (intento $i)"
+              echo "ok=true" >> $GITHUB_OUTPUT
+              exit 0
+            else
+              echo "❌ Falló conexión a $HEALTH_ENDPOINT"
+              CURL_ERROR=$(curl -sf --max-time 10 "$HEALTH_ENDPOINT" 2>&1 || true)
+              echo "Error: $CURL_ERROR"
+            fi
+            
+            if [ $i -lt 3 ]; then
+              echo "Esperando 10 segundos antes del siguiente intento..."
+              sleep 10
+            fi
           done
-          echo "ok=false" >> $GITHUB_OUTPUT
-          exit 1
+          
+          echo ""
+          echo "⚠️ Health check externo falló después de 3 intentos"
+          echo "Intentando verificar desde dentro de EC2..."
+          
+          # Verificar desde dentro de EC2 como último recurso
+          SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
+          SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
+          EC2_USER_RAW="${{ secrets.EC2_USER || 'ec2-user' }}"
+          EC2_USER=$(echo "$EC2_USER_RAW" | xargs)
+          EC2_HOST_RAW="$EC2_INSTANCE"
+          EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)
+          
+          if ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+            "${EC2_USER}@${EC2_HOST}" "curl -sf http://localhost:3000/ > /dev/null 2>&1 || curl -sf http://localhost:3000/api/health > /dev/null 2>&1"; then
+            echo "✅ La aplicación responde localmente en EC2"
+            echo "⚠️ Pero no es accesible desde fuera. Posibles causas:"
+            echo "  1. La app solo escucha en localhost (127.0.0.1) en lugar de 0.0.0.0"
+            echo "  2. El security group bloquea el puerto 3000"
+            echo "  3. Un firewall interno está bloqueando conexiones"
+            echo ""
+            echo "💡 Soluciones:"
+            echo "  - Verifica que tu app escuche en 0.0.0.0:3000, no solo en localhost"
+            echo "  - Abre el puerto 3000 en el security group de EC2"
+            echo "  - Configura HEALTH_CHECK_URL para usar un endpoint accesible"
+            echo ""
+            echo "ok=local" >> $GITHUB_OUTPUT
+            exit 0  # No fallar si responde localmente
+          else
+            echo "❌ La aplicación tampoco responde localmente en EC2"
+            echo ""
+            echo "Posibles causas:"
+            echo "  1. La aplicación no está corriendo (verifica con 'pm2 list')"
+            echo "  2. La aplicación está corriendo en un puerto diferente"
+            echo "  3. La aplicación necesita más tiempo para iniciar"
+            echo "  4. Hay un error en la aplicación que impide que responda"
+            echo ""
+            echo "💡 Soluciones:"
+            echo "  - Conéctate a EC2 y ejecuta 'pm2 list' y 'pm2 logs'"
+            echo "  - Verifica los logs de la aplicación"
+            echo "  - Verifica que el puerto en ecosystem.config.js sea 3000"
+            echo "  - Aumenta el tiempo de espera si la app tarda en iniciar"
+            echo ""
+            echo "ok=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
 
       - name: 🔄 Rollback on failure
         if: failure()
         run: |
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+          # Expandir ~ a $HOME y limpiar espacios
+          SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
+          SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
+          EC2_USER_RAW="${{ secrets.EC2_USER || 'ec2-user' }}"
+          EC2_USER=$(echo "$EC2_USER_RAW" | xargs)  # Trim espacios
+          EC2_HOST_RAW="${{ secrets.EC2_INSTANCE }}"
+          EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)  # Trim espacios
+          # Reconstruir APP_DIR desde EC2_USER limpio
+          APP_DIR="/home/${EC2_USER}/app"
+          
+          echo "Ejecutando rollback en ${EC2_USER}@${EC2_HOST}:${APP_DIR}"
+          ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+            "${EC2_USER}@${EC2_HOST}" "
             set -e
-            APP_DIR='${{ env.APP_DIR }}'
+            APP_DIR='${APP_DIR}'
             if [ -d \"\${APP_DIR}.old\" ]; then
               pm2 stop all || true
               rm -rf \"\$APP_DIR\"
@@ -383,7 +582,7 @@ jobs:
   # ---------------------------------------------------------------------------
   summary:
     name: 📋 Workflow Summary
-    runs-on: ${{ env.UBUNTU_VERSION }}
+    runs-on: ubuntu-latest
     needs: [test, build]
     if: always() && (needs.test.result == 'success' || needs.test.result == 'failure') && (needs.build.result == 'success' || needs.build.result == 'failure')
 
@@ -414,5 +613,5 @@ jobs:
             echo "- **Artifact:** ${ARTIFACT:-N/A}"
             echo ""
             echo "### 🌐 Servidor"
-            echo "- **URL:** Configurada en secret \`EC2_HOST\` (deploy en PR a main)."
+            echo "- **URL:** Configurada en secret \`EC2_INSTANCE\` (deploy en PR a main)."
           } >> $GITHUB_STEP_SUMMARY

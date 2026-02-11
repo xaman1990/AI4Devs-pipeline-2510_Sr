@@ -210,9 +210,60 @@ To run this project on an EC2 instance and ensure GitHub Actions works correctly
 
 For the GitHub Actions workflow to work correctly, you must set the following variables in your repository's secrets:
 
-1. **AWS_ACCESS_ID**: Your AWS access key ID.
-2. **AWS_ACCESS_KEY**: Your AWS secret access key.
+1. **AWS_ACCESS_ID**: Your AWS access key ID (see [How to get AWS_ACCESS_ID](#how-to-get-aws_access_id) below).
+2. **AWS_ACCESS_KEY**: The **full content of your EC2 SSH private key (`.pem` file)**. Paste the entire file contents (including the `-----BEGIN ... KEY-----` and `-----END ... KEY-----` lines).
 3. **EC2_INSTANCE**: The public IP address or DNS name of your EC2 instance.
+
+Optional: **EC2_USER** — SSH user (e.g. `ec2-user`, `ubuntu`). If not set, the pipeline uses `ec2-user`.
+
+**Note**: For SSH-based deployment (current pipeline), only `AWS_ACCESS_KEY` (`.pem` content) and `EC2_INSTANCE` are required. `AWS_ACCESS_ID` is listed for completeness but is not used in the current SSH deployment workflow.
+
+#### How to get AWS_ACCESS_ID
+
+To obtain your AWS Access Key ID (`AWS_ACCESS_ID`) and Secret Access Key:
+
+1. **Log in to AWS Console**:
+   - Go to [AWS Console](https://console.aws.amazon.com/)
+   - Sign in with your AWS account credentials.
+
+2. **Navigate to IAM**:
+   - In the AWS Console, search for "IAM" in the top search bar.
+   - Click on **IAM** (Identity and Access Management).
+
+3. **Go to Users**:
+   - In the left sidebar, click on **Users**.
+   - Click on your username (or the user for which you want to create access keys).
+
+4. **Create Access Key**:
+   - Click on the **Security credentials** tab.
+   - Scroll down to the **Access keys** section.
+   - Click **Create access key**.
+
+5. **Select Use Case**:
+   - Choose a use case (e.g., "Command Line Interface (CLI)", "Application running outside AWS", etc.).
+   - Check the confirmation box and click **Next**.
+
+6. **Download or Copy Credentials**:
+   - **Important**: You will see your **Access key ID** (this is your `AWS_ACCESS_ID`) and **Secret access key**.
+   - Click **Download .csv file** to save them securely, or copy both values immediately.
+   - **⚠️ Warning**: The secret access key is shown only once. If you lose it, you'll need to create a new access key.
+
+7. **Add to GitHub Secrets**:
+   - Go to your GitHub repository → **Settings** → **Secrets and variables** → **Actions**.
+   - Click **New repository secret**.
+   - Name: `AWS_ACCESS_ID`, Value: Your Access Key ID (e.g., `AKIAIOSFODNN7EXAMPLE`).
+   - Create another secret: Name: `AWS_ACCESS_KEY` (for the `.pem` content, see step 2 above).
+
+**Alternative**: If you're using AWS CLI locally, you can also create access keys via command line:
+```bash
+aws iam create-access-key --user-name YOUR_USERNAME
+```
+
+**Security Best Practices**:
+- Never commit access keys to your repository.
+- Use IAM roles with minimal required permissions.
+- Rotate access keys regularly.
+- Delete unused access keys.
 ### ⚠️ IMPORTANT: Development Workflow
 
 **Before creating a Pull Request, you should make sure that everything works correctly in your fork:**
@@ -467,9 +518,60 @@ Para ejecutar este proyecto en una instancia EC2 y asegurarte de que GitHub Acti
 
 Para que el flujo de trabajo de GitHub Actions funcione correctamente, debes configurar las siguientes variables en los secretos de tu repositorio:
 
-1. **AWS_ACCESS_ID**: Tu ID de clave de acceso de AWS.
-2. **AWS_ACCESS_KEY**: Tu clave de acceso secreta de AWS.
+1. **AWS_ACCESS_ID**: Tu ID de clave de acceso de AWS (ver [Cómo obtener AWS_ACCESS_ID](#cómo-obtener-aws_access_id) más abajo).
+2. **AWS_ACCESS_KEY**: **Contenido completo de tu clave privada SSH de EC2 (archivo `.pem`)**. Pega todo el contenido del archivo (incluidas las líneas `-----BEGIN ... KEY-----` y `-----END ... KEY-----`).
 3. **EC2_INSTANCE**: La dirección IP pública o el nombre DNS de tu instancia EC2.
+
+Opcional: **EC2_USER** — Usuario SSH (p. ej. `ec2-user`, `ubuntu`). Si no se define, el pipeline usa `ec2-user`.
+
+**Nota**: Para el despliegue por SSH (pipeline actual), solo se necesitan `AWS_ACCESS_KEY` (contenido del `.pem`) y `EC2_INSTANCE`. `AWS_ACCESS_ID` se lista por completitud pero no se usa en el workflow de despliegue por SSH actual.
+
+#### Cómo obtener AWS_ACCESS_ID
+
+Para obtener tu AWS Access Key ID (`AWS_ACCESS_ID`) y Secret Access Key:
+
+1. **Inicia sesión en AWS Console**:
+   - Ve a [AWS Console](https://console.aws.amazon.com/)
+   - Inicia sesión con tus credenciales de AWS.
+
+2. **Navega a IAM**:
+   - En la consola de AWS, busca "IAM" en la barra de búsqueda superior.
+   - Haz clic en **IAM** (Identity and Access Management).
+
+3. **Ve a Usuarios**:
+   - En el menú lateral izquierdo, haz clic en **Users** (Usuarios).
+   - Haz clic en tu nombre de usuario (o el usuario para el cual quieres crear claves de acceso).
+
+4. **Crear Access Key**:
+   - Haz clic en la pestaña **Security credentials** (Credenciales de seguridad).
+   - Desplázate hasta la sección **Access keys** (Claves de acceso).
+   - Haz clic en **Create access key** (Crear clave de acceso).
+
+5. **Seleccionar Caso de Uso**:
+   - Elige un caso de uso (p. ej., "Command Line Interface (CLI)", "Application running outside AWS", etc.).
+   - Marca la casilla de confirmación y haz clic en **Next** (Siguiente).
+
+6. **Descargar o Copiar Credenciales**:
+   - **Importante**: Verás tu **Access key ID** (este es tu `AWS_ACCESS_ID`) y **Secret access key**.
+   - Haz clic en **Download .csv file** (Descargar archivo .csv) para guardarlos de forma segura, o copia ambos valores inmediatamente.
+   - **⚠️ Advertencia**: La clave secreta de acceso solo se muestra una vez. Si la pierdes, tendrás que crear una nueva clave de acceso.
+
+7. **Añadir a GitHub Secrets**:
+   - Ve a tu repositorio de GitHub → **Settings** (Configuración) → **Secrets and variables** (Secretos y variables) → **Actions**.
+   - Haz clic en **New repository secret** (Nuevo secreto del repositorio).
+   - Nombre: `AWS_ACCESS_ID`, Valor: Tu Access Key ID (p. ej., `AKIAIOSFODNN7EXAMPLE`).
+   - Crea otro secreto: Nombre: `AWS_ACCESS_KEY` (para el contenido del `.pem`, ver paso 2 arriba).
+
+**Alternativa**: Si estás usando AWS CLI localmente, también puedes crear claves de acceso mediante la línea de comandos:
+```bash
+aws iam create-access-key --user-name TU_NOMBRE_USUARIO
+```
+
+**Mejores Prácticas de Seguridad**:
+- Nunca subas las claves de acceso a tu repositorio.
+- Usa roles de IAM con permisos mínimos necesarios.
+- Rota las claves de acceso regularmente.
+- Elimina las claves de acceso no utilizadas.
 ### ⚠️ IMPORTANTE: Flujo de Trabajo para el Desarrollo
 
 **Antes de crear un Pull Request, debes asegurarte de que todo funcione correctamente en tu fork:**
