@@ -302,12 +302,12 @@ jobs:
           # Expandir ~ a $HOME y limpiar espacios
           SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
           SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
-          EC2_USER_RAW="${{ env.EC2_USER }}"
+          EC2_USER_RAW="${{ secrets.EC2_USER || 'ec2-user' }}"
           EC2_USER=$(echo "$EC2_USER_RAW" | xargs)  # Trim espacios
           EC2_HOST_RAW="${{ secrets.EC2_INSTANCE }}"
           EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)  # Trim espacios
-          APP_DIR_RAW="${{ env.APP_DIR }}"
-          APP_DIR=$(echo "$APP_DIR_RAW" | xargs)  # Trim espacios
+          # Reconstruir APP_DIR desde EC2_USER limpio
+          APP_DIR="/home/${EC2_USER}/app"
           
           # Verificar que la clave existe y tiene permisos correctos
           if [ ! -f "$SSH_KEY" ]; then
@@ -338,15 +338,18 @@ jobs:
           # Expandir ~ a $HOME y limpiar espacios
           SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
           SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
-          EC2_USER_RAW="${{ env.EC2_USER }}"
+          EC2_USER_RAW="${{ secrets.EC2_USER || 'ec2-user' }}"
           EC2_USER=$(echo "$EC2_USER_RAW" | xargs)  # Trim espacios
           EC2_HOST_RAW="${{ secrets.EC2_INSTANCE }}"
           EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)  # Trim espacios
-          APP_DIR_RAW="${{ env.APP_DIR }}"
-          APP_DIR=$(echo "$APP_DIR_RAW" | xargs)  # Trim espacios
+          # Reconstruir APP_DIR desde EC2_USER limpio
+          APP_DIR="/home/${EC2_USER}/app"
           
+          echo "Creando directorio ${APP_DIR}-new en ${EC2_USER}@${EC2_HOST}"
           ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
             "${EC2_USER}@${EC2_HOST}" "mkdir -p ${APP_DIR}-new"
+          
+          echo "Sincronizando archivos a ${EC2_USER}@${EC2_HOST}:${APP_DIR}-new/"
           rsync -avz --delete \
             -e "ssh -i $SSH_KEY -o StrictHostKeyChecking=no" \
             backend-deploy/ "${EC2_USER}@${EC2_HOST}:${APP_DIR}-new/"
@@ -356,13 +359,14 @@ jobs:
           # Expandir ~ a $HOME y limpiar espacios
           SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
           SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
-          EC2_USER_RAW="${{ env.EC2_USER }}"
+          EC2_USER_RAW="${{ secrets.EC2_USER || 'ec2-user' }}"
           EC2_USER=$(echo "$EC2_USER_RAW" | xargs)  # Trim espacios
           EC2_HOST_RAW="${{ secrets.EC2_INSTANCE }}"
           EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)  # Trim espacios
-          APP_DIR_RAW="${{ env.APP_DIR }}"
-          APP_DIR=$(echo "$APP_DIR_RAW" | xargs)  # Trim espacios
+          # Reconstruir APP_DIR desde EC2_USER limpio
+          APP_DIR="/home/${EC2_USER}/app"
           
+          echo "Desplegando aplicación en ${EC2_USER}@${EC2_HOST}:${APP_DIR}"
           ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
             "${EC2_USER}@${EC2_HOST}" "
             set -e
@@ -407,13 +411,14 @@ jobs:
           # Expandir ~ a $HOME y limpiar espacios
           SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
           SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
-          EC2_USER_RAW="${{ env.EC2_USER }}"
+          EC2_USER_RAW="${{ secrets.EC2_USER || 'ec2-user' }}"
           EC2_USER=$(echo "$EC2_USER_RAW" | xargs)  # Trim espacios
           EC2_HOST_RAW="${{ secrets.EC2_INSTANCE }}"
           EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)  # Trim espacios
-          APP_DIR_RAW="${{ env.APP_DIR }}"
-          APP_DIR=$(echo "$APP_DIR_RAW" | xargs)  # Trim espacios
+          # Reconstruir APP_DIR desde EC2_USER limpio
+          APP_DIR="/home/${EC2_USER}/app"
           
+          echo "Ejecutando rollback en ${EC2_USER}@${EC2_HOST}:${APP_DIR}"
           ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
             "${EC2_USER}@${EC2_HOST}" "
             set -e
