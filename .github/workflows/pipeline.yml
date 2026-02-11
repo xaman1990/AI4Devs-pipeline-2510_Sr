@@ -169,9 +169,12 @@ jobs:
           cache: "npm"
           cache-dependency-path: backend/package-lock.json
 
+      # Instalar también devDependencies (TypeScript, @types, etc.) para poder compilar
       - name: 📦 Install dependencies (build)
         run: npm ci
         working-directory: backend
+        env:
+          NODE_ENV: development
 
       - name: 🔧 Prisma generate
         run: npx prisma generate
