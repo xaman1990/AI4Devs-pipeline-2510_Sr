@@ -96,15 +96,17 @@ Deben estar configurados en **Settings → Secrets and variables → Actions** d
 
 | Secret | Obligatorio para | Descripción |
 |--------|-------------------|-------------|
-| `EC2_HOST` | Deploy | IP pública o DNS del servidor EC2 |
+| `EC2_INSTANCE` | Deploy | IP pública o DNS del servidor EC2 |
 | `EC2_USER` | Deploy | Usuario SSH (`ec2-user` o `ubuntu`) |
 | `EC2_SSH_KEY` | Deploy | Contenido completo del archivo `.pem` |
 
-Opcional:
+Opcionales (no se usan en el deploy por SSH, pero puedes tenerlos para otras integraciones):
 
 | Secret | Uso |
 |--------|-----|
-| `HEALTH_CHECK_URL` | URL completa para el health check (p. ej. `https://tudominio.com/api/health`). Si no se define, se usa `http://EC2_HOST:3000/` |
+| `AWS_ACCESS_ID` | ID de clave de acceso AWS (no usado por este pipeline) |
+| `AWS_ACCESS_KEY` | Clave secreta AWS (no usado por este pipeline) |
+| `HEALTH_CHECK_URL` | URL completa para el health check. Si no se define, se usa `http://EC2_INSTANCE:3000/` |
 
 ### Configuración del servidor EC2
 
@@ -231,16 +233,16 @@ El pipeline usa los siguientes permisos (definidos en el YAML):
 5. **Transfer files** — Crea `app-new` en el servidor y hace `rsync` del contenido del artifact.
 6. **Deploy on EC2** — Por SSH: `pm2 stop all`, mueve `app` → `app.old`, mueve `app-new` → `app`, `pm2 start ecosystem.config.js`, `pm2 save`.
 7. **Wait** — Espera 30 segundos.
-8. **Health check** — Hasta 3 intentos contra `HEALTH_CHECK_URL` o `http://EC2_HOST:3000/` (y opcionalmente `/api/health`).
+8. **Health check** — Hasta 3 intentos contra `HEALTH_CHECK_URL` o `http://EC2_INSTANCE:3000/` (y opcionalmente `/api/health`).
 9. **Rollback on failure** — Si el job falla, restaura desde `app.old` y reinicia PM2.
 10. **Notify PR** — Comenta en el PR éxito o fallo del deploy.
 
 #### Inputs y outputs
 
-- **Inputs**: Artifact `deploy-package`; secrets `EC2_HOST`, `EC2_USER`, `EC2_SSH_KEY`; opcional `HEALTH_CHECK_URL`.
+- **Inputs**: Artifact `deploy-package`; secrets `EC2_INSTANCE`, `EC2_USER`, `EC2_SSH_KEY`; opcional `HEALTH_CHECK_URL`.
 - **Outputs**:
   - `deploy_version`: Misma versión que `build_version`.
-  - `deploy_url`: `https://${{ secrets.EC2_HOST }}`.
+  - `deploy_url`: `https://${{ secrets.EC2_INSTANCE }}`.
 
 #### Posibles errores y soluciones
 
@@ -282,16 +284,18 @@ El pipeline usa los siguientes permisos (definidos en el YAML):
 
 | Secret | Descripción | Cómo obtenerlo | Ejemplo |
 |--------|-------------|----------------|---------|
-| **EC2_HOST** | IP pública o DNS del servidor EC2 | En AWS: EC2 → Instancias → IPv4 pública; o dominio apuntando a esa IP | `3.12.34.56` o `api.midominio.com` |
+| **EC2_INSTANCE** | IP pública o DNS del servidor EC2 | En AWS: EC2 → Instancias → IPv4 pública; o dominio apuntando a esa IP | `3.12.34.56` o `api.midominio.com` |
 | **EC2_USER** | Usuario SSH para conectarse a la instancia | Depende del SO: Amazon Linux → `ec2-user`; Ubuntu → `ubuntu` | `ec2-user` |
 | **EC2_SSH_KEY** | Contenido del archivo de clave privada `.pem` | Al crear la instancia EC2 (par de claves) o desde la consola AWS; copiar **todo** el archivo | `-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----` |
+| **AWS_ACCESS_ID** | (Opcional) ID de clave de acceso AWS | IAM → Usuarios → Claves de acceso. **No se usa** en el deploy por SSH de este pipeline | — |
+| **AWS_ACCESS_KEY** | (Opcional) Clave secreta AWS | Misma clave que el ID anterior. **No se usa** en el deploy por SSH | — |
 | **HEALTH_CHECK_URL** | (Opcional) URL para el health check tras el deploy | URL pública de la app (raíz o endpoint tipo `/api/health`) | `https://api.midominio.com/` o `https://api.midominio.com/api/health` |
 
 Cómo añadirlos en GitHub:
 
 1. Repositorio → **Settings** → **Secrets and variables** → **Actions**.
 2. **New repository secret**.
-3. Nombre (ej. `EC2_HOST`) y valor (sin espacios extra al inicio/final en el `.pem`).
+3. Nombre (ej. `EC2_INSTANCE`) y valor (sin espacios extra al inicio/final en el `.pem`).
 
 ---
 
@@ -412,11 +416,11 @@ sudo nginx -t && sudo systemctl reload nginx
   - Verificar que la clave está asociada a la instancia EC2 y que `EC2_USER` es el correcto para el SO.
 
 - **Host key verification failed**  
-  - El workflow ya añade el host con `ssh-keyscan`. Si falla, revisar que `EC2_HOST` sea resoluble y que el puerto 22 esté abierto.
+  - El workflow ya añade el host con `ssh-keyscan`. Si falla, revisar que `EC2_INSTANCE` sea resoluble y que el puerto 22 esté abierto.
 
 - **Connection timed out**  
   - Security group: permitir SSH (22) desde los IPs de GitHub Actions o desde tu IP.  
-  - Comprobar que la instancia tiene IP pública o que el runner puede alcanzar la IP/DNS que pones en `EC2_HOST`.
+  - Comprobar que la instancia tiene IP pública o que el runner puede alcanzar la IP/DNS que pones en `EC2_INSTANCE`.
 
 ### Health check timeout
 
@@ -430,7 +434,7 @@ sudo nginx -t && sudo systemctl reload nginx
 Si necesitas volver atrás sin re-ejecutar el pipeline:
 
 ```bash
-ssh -i tu-clave.pem ec2-user@<EC2_HOST>
+ssh -i tu-clave.pem ec2-user@<EC2_INSTANCE>
 
 cd /home/ec2-user/app
 pm2 stop all
@@ -466,7 +470,7 @@ No subir nunca claves ni datos sensibles al repositorio; solo referenciarlos com
 ### Cómo modificar la configuración de EC2
 
 - **Ruta de la app**: En el workflow, la ruta se construye con `secrets.EC2_USER` (ej. `/home/ec2-user/app`). Para otra ruta, habría que parametrizar (variable de entorno o secret) y usarla en los pasos de deploy.
-- **Usuario o host**: Cambiar los secrets `EC2_USER` y `EC2_HOST`; no es necesario tocar el código del pipeline si todo se expone por secrets.
+- **Usuario o host**: Cambiar los secrets `EC2_USER` y `EC2_INSTANCE`; no es necesario tocar el código del pipeline si todo se expone por secrets.
 - **PM2**: El archivo `backend/ecosystem.config.js` se incluye en el artifact; para cambiar nombre de app, instancias o rutas de logs, editar ese archivo en el repo y volver a desplegar.
 
 ---

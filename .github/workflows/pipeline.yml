@@ -234,13 +234,15 @@ jobs:
     runs-on: ${{ env.UBUNTU_VERSION }}
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
 
+    # Secrets: EC2_INSTANCE (IP/DNS), EC2_USER (ec2-user|ubuntu), EC2_SSH_KEY (contenido .pem)
+    # Opcional: AWS_ACCESS_ID, AWS_ACCESS_KEY (no se usan en este deploy por SSH)
     outputs:
       deploy_version: ${{ needs.build.outputs.build_version }}
-      deploy_url: https://${{ secrets.EC2_HOST }}
+      deploy_url: https://${{ secrets.EC2_INSTANCE }}
 
     environment:
       name: production
-      url: https://${{ secrets.EC2_HOST }}
+      url: https://${{ secrets.EC2_INSTANCE }}
 
     env:
       NODE_ENV: production
@@ -265,14 +267,14 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ${{ env.SSH_KEY_PATH }}
           chmod 600 ${{ env.SSH_KEY_PATH }}
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.EC2_INSTANCE }} >> ~/.ssh/known_hosts 2>/dev/null || true
           eval "$(ssh-agent -s)"
           ssh-add ${{ env.SSH_KEY_PATH }}
 
       - name: 💾 Create backup on EC2
         run: |
           SSH_OPTS="-i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no"
-          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
             set -e
             APP_DIR='${{ env.APP_DIR }}'
             if [ -d \"\$APP_DIR\" ] && [ \"\$(ls -A \$APP_DIR 2>/dev/null)\" ]; then
@@ -287,15 +289,15 @@ jobs:
       - name: 📤 Transfer files to EC2
         run: |
           ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "mkdir -p ${{ env.APP_DIR }}-new"
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "mkdir -p ${{ env.APP_DIR }}-new"
           rsync -avz --delete \
             -e "ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no" \
-            backend-deploy/ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ env.APP_DIR }}-new/
+            backend-deploy/ ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }}:${{ env.APP_DIR }}-new/
 
       - name: 🚀 Deploy on EC2 (PM2)
         run: |
           ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
             set -e
             APP_DIR='${{ env.APP_DIR }}'
             pm2 stop all || true
@@ -316,10 +318,10 @@ jobs:
       - name: ✅ Health check
         id: health
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_INSTANCE: ${{ secrets.EC2_INSTANCE }}
           HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
         run: |
-          URL="${HEALTH_CHECK_URL:-http://$EC2_HOST:3000/}"
+          URL="${HEALTH_CHECK_URL:-http://$EC2_INSTANCE:3000/}"
           for i in 1 2 3; do
             if curl -sf --max-time 10 "$URL" > /dev/null || curl -sf --max-time 10 "${URL%/}/api/health" > /dev/null; then
               echo "Health check OK (intento $i)"
@@ -336,7 +338,7 @@ jobs:
         if: failure()
         run: |
           ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
             set -e
             APP_DIR='${{ env.APP_DIR }}'
             if [ -d \"\${APP_DIR}.old\" ]; then
@@ -414,5 +416,5 @@ jobs:
             echo "- **Artifact:** ${ARTIFACT:-N/A}"
             echo ""
             echo "### 🌐 Servidor"
-            echo "- **URL:** Configurada en secret \`EC2_HOST\` (deploy en PR a main)."
+            echo "- **URL:** Configurada en secret \`EC2_INSTANCE\` (deploy en PR a main)."
           } >> $GITHUB_STEP_SUMMARY
