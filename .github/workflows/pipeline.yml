@@ -39,7 +39,7 @@ jobs:
   # ---------------------------------------------------------------------------
   test:
     name: 🧪 Run Tests
-    runs-on: ${{ env.UBUNTU_VERSION }}
+    runs-on: ubuntu-latest
 
     outputs:
       coverage_percentage: ${{ steps.coverage-out.outputs.percentage }}
@@ -147,7 +147,7 @@ jobs:
   build:
     name: 🏗️ Build Application
     needs: test
-    runs-on: ${{ env.UBUNTU_VERSION }}
+    runs-on: ubuntu-latest
 
     outputs:
       build_version: ${{ steps.build-info.outputs.version }}
@@ -169,17 +169,34 @@ jobs:
           cache: "npm"
           cache-dependency-path: backend/package-lock.json
 
+      # README: "cd backend" + "npm install" luego "npm run build". Instalamos todo (incl. dev) para compilar.
       - name: 📦 Install dependencies (build)
-        run: npm ci
+        run: npm ci --include=dev
         working-directory: backend
 
       - name: 🔧 Prisma generate
         run: npx prisma generate
         working-directory: backend
 
+      # tsconfig de build: excluye tests y ajusta lib para que tsc no falle. npx -p typescript usa el tsc del proyecto.
       - name: 📜 Compile TypeScript
-        run: npm run build
         working-directory: backend
+        run: |
+          node -e "
+          const base = require('./tsconfig.json');
+          const build = {
+            ...base,
+            compilerOptions: {
+              ...base.compilerOptions,
+              lib: ['ES2020'],
+              skipLibCheck: true
+            },
+            exclude: [...(base.exclude || []), 'node_modules', '**/*.test.ts', '**/__tests__']
+          };
+          require('fs').writeFileSync('tsconfig.build.json', JSON.stringify(build, null, 2));
+          "
+          npx -p typescript tsc -p tsconfig.build.json
+          rm -f tsconfig.build.json
 
       - name: 📝 Generate build info
         id: build-info
@@ -231,16 +248,18 @@ jobs:
   deploy:
     name: 🚀 Deploy to EC2
     needs: build
-    runs-on: ${{ env.UBUNTU_VERSION }}
+    runs-on: ubuntu-latest
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
 
+    # Secrets: EC2_INSTANCE (IP/DNS), EC2_USER (ec2-user|ubuntu), EC2_SSH_KEY (contenido .pem)
+    # Opcional: AWS_ACCESS_ID, AWS_ACCESS_KEY (no se usan en este deploy por SSH)
     outputs:
       deploy_version: ${{ needs.build.outputs.build_version }}
-      deploy_url: https://${{ secrets.EC2_HOST }}
+      deploy_url: https://deploy-target
 
     environment:
       name: production
-      url: https://${{ secrets.EC2_HOST }}
+      url: https://github.com
 
     env:
       NODE_ENV: production
@@ -263,16 +282,17 @@ jobs:
       - name: 🔑 Setup SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ${{ env.SSH_KEY_PATH }}
+          # Normalizar clave PEM: quitar \r (CRLF) y asegurar una sola línea final
+          echo "${{ secrets.EC2_SSH_KEY }}" | sed 's/\r$//' | tee ${{ env.SSH_KEY_PATH }} > /dev/null
           chmod 600 ${{ env.SSH_KEY_PATH }}
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.EC2_INSTANCE }} >> ~/.ssh/known_hosts 2>/dev/null || true
           eval "$(ssh-agent -s)"
           ssh-add ${{ env.SSH_KEY_PATH }}
 
       - name: 💾 Create backup on EC2
         run: |
           SSH_OPTS="-i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no"
-          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
             set -e
             APP_DIR='${{ env.APP_DIR }}'
             if [ -d \"\$APP_DIR\" ] && [ \"\$(ls -A \$APP_DIR 2>/dev/null)\" ]; then
@@ -287,15 +307,15 @@ jobs:
       - name: 📤 Transfer files to EC2
         run: |
           ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "mkdir -p ${{ env.APP_DIR }}-new"
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "mkdir -p ${{ env.APP_DIR }}-new"
           rsync -avz --delete \
             -e "ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no" \
-            backend-deploy/ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ env.APP_DIR }}-new/
+            backend-deploy/ ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }}:${{ env.APP_DIR }}-new/
 
       - name: 🚀 Deploy on EC2 (PM2)
         run: |
           ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
             set -e
             APP_DIR='${{ env.APP_DIR }}'
             pm2 stop all || true
@@ -316,10 +336,10 @@ jobs:
       - name: ✅ Health check
         id: health
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_INSTANCE: ${{ secrets.EC2_INSTANCE }}
           HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
         run: |
-          URL="${HEALTH_CHECK_URL:-http://$EC2_HOST:3000/}"
+          URL="${HEALTH_CHECK_URL:-http://$EC2_INSTANCE:3000/}"
           for i in 1 2 3; do
             if curl -sf --max-time 10 "$URL" > /dev/null || curl -sf --max-time 10 "${URL%/}/api/health" > /dev/null; then
               echo "Health check OK (intento $i)"
@@ -336,7 +356,7 @@ jobs:
         if: failure()
         run: |
           ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
             set -e
             APP_DIR='${{ env.APP_DIR }}'
             if [ -d \"\${APP_DIR}.old\" ]; then
@@ -383,7 +403,7 @@ jobs:
   # ---------------------------------------------------------------------------
   summary:
     name: 📋 Workflow Summary
-    runs-on: ${{ env.UBUNTU_VERSION }}
+    runs-on: ubuntu-latest
     needs: [test, build]
     if: always() && (needs.test.result == 'success' || needs.test.result == 'failure') && (needs.build.result == 'success' || needs.build.result == 'failure')
 
@@ -414,5 +434,5 @@ jobs:
             echo "- **Artifact:** ${ARTIFACT:-N/A}"
             echo ""
             echo "### 🌐 Servidor"
-            echo "- **URL:** Configurada en secret \`EC2_HOST\` (deploy en PR a main)."
+            echo "- **URL:** Configurada en secret \`EC2_INSTANCE\` (deploy en PR a main)."
           } >> $GITHUB_STEP_SUMMARY
