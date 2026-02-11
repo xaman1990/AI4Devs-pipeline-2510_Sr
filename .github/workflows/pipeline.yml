@@ -169,18 +169,16 @@ jobs:
           cache: "npm"
           cache-dependency-path: backend/package-lock.json
 
-      # Instalar también devDependencies (TypeScript, @types, etc.) para poder compilar
+      # README: "cd backend" + "npm install" luego "npm run build". Instalamos todo (incl. dev) para compilar.
       - name: 📦 Install dependencies (build)
-        run: npm ci
+        run: npm ci --include=dev
         working-directory: backend
-        env:
-          NODE_ENV: development
 
       - name: 🔧 Prisma generate
         run: npx prisma generate
         working-directory: backend
 
-      # tsconfig de build: excluye tests y ajusta lib/types para que tsc no falle en CI
+      # tsconfig de build: excluye tests y ajusta lib para que tsc no falle. npx -p typescript usa el tsc del proyecto.
       - name: 📜 Compile TypeScript
         working-directory: backend
         run: |
@@ -197,7 +195,7 @@ jobs:
           };
           require('fs').writeFileSync('tsconfig.build.json', JSON.stringify(build, null, 2));
           "
-          node ./node_modules/typescript/bin/tsc.js -p tsconfig.build.json
+          npx -p typescript tsc -p tsconfig.build.json
           rm -f tsconfig.build.json
 
       - name: 📝 Generate build info
