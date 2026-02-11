@@ -248,11 +248,54 @@ El pipeline usa los siguientes permisos (definidos en el YAML):
 
 | Error | Causa típica | Solución |
 |-------|----------------|----------|
+| **Error loading key "...": error in libcrypto** | El contenido de `EC2_SSH_KEY` tiene saltos de línea incorrectos (CRLF), espacios extra o está mal copiado | Ver [Solución: Error libcrypto con EC2_SSH_KEY](#solución-error-libcrypto-con-ec2_ssh_key) más abajo. |
 | SSH: Permission denied | Clave incorrecta, usuario o permisos del `.pem` | Verificar secret `EC2_SSH_KEY` (todo el contenido del .pem, incl. header/footer). Comprobar `EC2_USER` y que la clave esté asociada a la instancia. |
 | Host key verification failed | Host no en `known_hosts` | El workflow ya ejecuta `ssh-keyscan`; si usas proxy o saltos, revisar conectividad. |
 | rsync or SSH timeout | Firewall, security group, IP incorrecta | Abrir puerto 22 al IP del runner de GitHub (o usar self-hosted runner). Ver [GitHub IP ranges](https://api.github.com/meta). |
 | Health check timeout | App no responde en 30s o URL incorrecta | Aumentar espera o reintentos; definir `HEALTH_CHECK_URL` si la app está detrás de Nginx (puerto 80/443). |
 | PM2 not found | PM2 no instalado en EC2 | Instalar: `npm i -g pm2` y asegurar que esté en el PATH del usuario de deploy. |
+
+#### Solución: Error libcrypto con EC2_SSH_KEY
+
+Si el step **Setup SSH** falla con `Error loading key "...": error in libcrypto`, la clave privada en el secret está mal formateada (saltos de línea Windows, truncada o con caracteres extra). Sigue estos pasos:
+
+1. **Obtener el contenido correcto del `.pem`** (en tu máquina, donde tienes el archivo):
+   ```bash
+   cat tu-clave.pem
+   ```
+   Debe verse exactamente así (ejemplo):
+   ```
+   -----BEGIN RSA PRIVATE KEY-----
+   MIIEowIBAAKCAQEA...
+   (varias líneas en base64)
+   ...
+   -----END RSA PRIVATE KEY-----
+   ```
+   - Debe empezar por `-----BEGIN` y terminar por `-----END ... KEY-----`.
+   - No debe haber líneas extra al inicio o al final (salvo una sola línea en blanco al final, que no suele dar problema).
+
+2. **Copiar sin tocar el formato**:
+   - Abre el `.pem` con un editor de texto (VS Code, Notepad++, etc.).
+   - Selecciona **todo** (desde `-----BEGIN` hasta `-----END ... KEY-----`).
+   - Copia (Ctrl+C / Cmd+C). No copies desde una terminal que pueda añadir colores o espacios.
+
+3. **Si usaste Windows o pegas desde un correo/docs**:
+   - Convierte a saltos de línea Unix antes de pegar en GitHub:
+     ```bash
+     # En Git Bash / WSL / Mac/Linux
+     sed 's/\r$//' tu-clave.pem | pbcopy   # Mac
+     # o sed 's/\r$//' tu-clave.pem y luego copia la salida a mano
+     ```
+
+4. **Actualizar el secret en GitHub**:
+   - Repositorio → **Settings** → **Secrets and variables** → **Actions**.
+   - Localiza **EC2_SSH_KEY** → **Update**.
+   - Pega **solo** el contenido del `.pem` (nada antes de `-----BEGIN` ni después de `-----END`).
+   - Guarda.
+
+5. **Vuelve a ejecutar el workflow** (re-run del job "Deploy to EC2" o del workflow completo).
+
+El pipeline también normaliza la clave al escribirla (quita `\r` y ajusta saltos de línea); si tras estos pasos sigue fallando, revisa que no hayas pegado dos veces el bloque o que no falte la línea final `-----END ... KEY-----`.
 
 ---
 

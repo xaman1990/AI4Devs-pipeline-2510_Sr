@@ -208,11 +208,31 @@ To run this project on an EC2 instance and ensure GitHub Actions works correctly
 
 ### Variables in GitHub Actions
 
-For the GitHub Actions workflow to work correctly, you must set the following variables in your repository's secrets:
+For the GitHub Actions workflow to work correctly, you must set the following variables in your repository's secrets.
 
-1. **AWS_ACCESS_ID**: Your AWS access key ID.
-2. **AWS_ACCESS_KEY**: Your AWS secret access key.
-3. **EC2_INSTANCE**: The public IP address or DNS name of your EC2 instance.
+**Where to add them:** In your GitHub repo go to **Settings** → **Secrets and variables** → **Actions** → **New repository secret** (or update an existing one).
+
+| Secret | Description |
+|--------|-------------|
+| **EC2_INSTANCE** | Public IP or DNS of your EC2 instance (e.g. `3.12.34.56` or `api.example.com`). |
+| **EC2_USER** | SSH user for the instance: `ec2-user` (Amazon Linux) or `ubuntu` (Ubuntu). |
+| **EC2_SSH_KEY** | **Contents of your `.pem` file** (see below). |
+| **AWS_ACCESS_ID** | (Optional) AWS access key ID. |
+| **AWS_ACCESS_KEY** | (Optional) AWS secret access key. |
+| **HEALTH_CHECK_URL** | (Optional) URL for post-deploy health check (e.g. `http://YOUR_EC2_IP:3000/`). |
+
+#### Where to put the `.pem` key (EC2_SSH_KEY)
+
+**You do not upload the file.** You paste its **text content** into a GitHub secret:
+
+1. Open your `.pem` file in a text editor (e.g. VS Code). It was downloaded when you created the EC2 key pair.
+2. Select and copy **the entire content** from `-----BEGIN ... PRIVATE KEY-----` through `-----END ... PRIVATE KEY-----` (including those two lines).
+3. In GitHub: **Settings** → **Secrets and variables** → **Actions** → **New repository secret**.
+4. Name the secret: **EC2_SSH_KEY**.
+5. In the value field, paste the copied text (the full PEM block). Save.
+
+**Important:** Do not commit the `.pem` file to the repository. Keep it only on your machine and in GitHub Secrets. If you get `Error loading key ... error in libcrypto`, the pasted value may have wrong line endings; see [docs/PIPELINE.md](docs/PIPELINE.md) for the "Error libcrypto" troubleshooting section.
+
 ### ⚠️ IMPORTANT: Development Workflow
 
 **Before creating a Pull Request, you should make sure that everything works correctly in your fork:**
@@ -465,11 +485,31 @@ Para ejecutar este proyecto en una instancia EC2 y asegurarte de que GitHub Acti
 
 ### Variables en GitHub Actions
 
-Para que el flujo de trabajo de GitHub Actions funcione correctamente, debes configurar las siguientes variables en los secretos de tu repositorio:
+Para que el flujo de trabajo de GitHub Actions funcione correctamente, debes configurar las siguientes variables en los secretos de tu repositorio.
 
-1. **AWS_ACCESS_ID**: Tu ID de clave de acceso de AWS.
-2. **AWS_ACCESS_KEY**: Tu clave de acceso secreta de AWS.
-3. **EC2_INSTANCE**: La dirección IP pública o el nombre DNS de tu instancia EC2.
+**Dónde añadirlas:** En tu repositorio de GitHub ve a **Settings** → **Secrets and variables** → **Actions** → **New repository secret** (o edita uno existente).
+
+| Secret | Descripción |
+|--------|-------------|
+| **EC2_INSTANCE** | IP pública o DNS de tu instancia EC2 (ej. `3.12.34.56` o `api.ejemplo.com`). |
+| **EC2_USER** | Usuario SSH de la instancia: `ec2-user` (Amazon Linux) o `ubuntu` (Ubuntu). |
+| **EC2_SSH_KEY** | **Contenido completo de tu archivo `.pem`** (ver más abajo). |
+| **AWS_ACCESS_ID** | (Opcional) ID de clave de acceso de AWS. |
+| **AWS_ACCESS_KEY** | (Opcional) Clave secreta de acceso de AWS. |
+| **HEALTH_CHECK_URL** | (Opcional) URL para el health check tras el deploy (ej. `http://TU_IP_EC2:3000/`). |
+
+#### Dónde colocar la clave `.pem` (EC2_SSH_KEY)
+
+**No se sube el archivo.** Se pega el **contenido de texto** del `.pem` en un secret de GitHub:
+
+1. Abre tu archivo `.pem` en un editor de texto (p. ej. VS Code). Es el que descargaste al crear el par de claves de EC2.
+2. Selecciona y copia **todo el contenido** desde `-----BEGIN ... PRIVATE KEY-----` hasta `-----END ... PRIVATE KEY-----` (incluidas esas dos líneas).
+3. En GitHub: **Settings** → **Secrets and variables** → **Actions** → **New repository secret**.
+4. Nombre del secret: **EC2_SSH_KEY**.
+5. En el campo de valor, pega el texto copiado (el bloque PEM completo). Guarda.
+
+**Importante:** No subas el `.pem` al repositorio. Guárdalo solo en tu máquina y en GitHub Secrets. Si aparece `Error loading key ... error in libcrypto`, es posible que el valor pegado tenga saltos de línea incorrectos; en [docs/PIPELINE.md](docs/PIPELINE.md) está la sección de solución para ese error.
+
 ### ⚠️ IMPORTANTE: Flujo de Trabajo para el Desarrollo
 
 **Antes de crear un Pull Request, debes asegurarte de que todo funcione correctamente en tu fork:**

@@ -282,7 +282,8 @@ jobs:
       - name: 🔑 Setup SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ${{ env.SSH_KEY_PATH }}
+          # Normalizar clave PEM: quitar \r (CRLF) y asegurar una sola línea final
+          echo "${{ secrets.EC2_SSH_KEY }}" | sed 's/\r$//' | tee ${{ env.SSH_KEY_PATH }} > /dev/null
           chmod 600 ${{ env.SSH_KEY_PATH }}
           ssh-keyscan -H ${{ secrets.EC2_INSTANCE }} >> ~/.ssh/known_hosts 2>/dev/null || true
           eval "$(ssh-agent -s)"
