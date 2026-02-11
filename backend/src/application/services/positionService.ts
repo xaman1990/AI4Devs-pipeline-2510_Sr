@@ -20,7 +20,7 @@ export const getCandidatesByPositionService = async (positionId: number) => {
             }
         });
 
-        return applications.map((app: (typeof applications)[number]) => ({
+        return applications.map(app => ({
             fullName: `${app.candidate.firstName} ${app.candidate.lastName}`,
             currentInterviewStep: app.interviewStep.name,
             candidateId: app.candidateId,
@@ -55,7 +55,7 @@ export const getInterviewFlowByPositionService = async (positionId: number) => {
         interviewFlow: {
             id: positionWithInterviewFlow.interviewFlow.id,
             description: positionWithInterviewFlow.interviewFlow.description,
-            interviewSteps: positionWithInterviewFlow.interviewFlow.interviewSteps.map((step: { id: number; interviewFlowId: number; interviewTypeId: number; name: string; orderIndex: number }) => ({
+            interviewSteps: positionWithInterviewFlow.interviewFlow.interviewSteps.map(step => ({
                 id: step.id,
                 interviewFlowId: step.interviewFlowId,
                 interviewTypeId: step.interviewTypeId,

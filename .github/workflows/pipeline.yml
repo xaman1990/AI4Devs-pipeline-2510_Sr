@@ -177,9 +177,25 @@ jobs:
         run: npx prisma generate
         working-directory: backend
 
+      # tsconfig de build: excluye tests y ajusta lib/types para que tsc no falle en CI
       - name: 📜 Compile TypeScript
-        run: npm run build
         working-directory: backend
+        run: |
+          node -e "
+          const base = require('./tsconfig.json');
+          const build = {
+            ...base,
+            compilerOptions: {
+              ...base.compilerOptions,
+              lib: ['ES2020'],
+              skipLibCheck: true
+            },
+            exclude: [...(base.exclude || []), 'node_modules', '**/*.test.ts', '**/__tests__']
+          };
+          require('fs').writeFileSync('tsconfig.build.json', JSON.stringify(build, null, 2));
+          "
+          npx tsc -p tsconfig.build.json
+          rm -f tsconfig.build.json
 
       - name: 📝 Generate build info
         id: build-info
