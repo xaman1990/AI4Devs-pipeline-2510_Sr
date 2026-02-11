@@ -97,8 +97,8 @@ Deben estar configurados en **Settings → Secrets and variables → Actions** d
 | Secret | Obligatorio para | Descripción |
 |--------|-------------------|-------------|
 | `EC2_INSTANCE` | Deploy | IP pública o DNS del servidor EC2 |
-| `EC2_USER` | Deploy | Usuario SSH (`ec2-user` o `ubuntu`) |
-| `EC2_SSH_KEY` | Deploy | Contenido completo del archivo `.pem` |
+| `EC2_USER` | Deploy (opcional) | Usuario SSH (`ec2-user` o `ubuntu`). Si no se define, se usa `ec2-user`. |
+| `AWS_ACCESS_KEY` | Deploy | Contenido completo del archivo `.pem` (clave privada SSH de EC2). Según README, es el mismo secret que se usa para esto. |
 
 Opcionales (no se usan en el deploy por SSH, pero puedes tenerlos para otras integraciones):
 
@@ -239,7 +239,7 @@ El pipeline usa los siguientes permisos (definidos en el YAML):
 
 #### Inputs y outputs
 
-- **Inputs**: Artifact `deploy-package`; secrets `EC2_INSTANCE`, `EC2_USER`, `EC2_SSH_KEY`; opcional `HEALTH_CHECK_URL`.
+- **Inputs**: Artifact `deploy-package`; secrets `EC2_INSTANCE`, `AWS_ACCESS_KEY` (contenido del .pem); opcionales `EC2_USER`, `HEALTH_CHECK_URL`.
 - **Outputs**:
   - `deploy_version`: Misma versión que `build_version`.
   - `deploy_url`: `https://${{ secrets.EC2_INSTANCE }}`.
@@ -248,16 +248,16 @@ El pipeline usa los siguientes permisos (definidos en el YAML):
 
 | Error | Causa típica | Solución |
 |-------|----------------|----------|
-| **Error loading key "...": error in libcrypto** | El contenido de `EC2_SSH_KEY` tiene saltos de línea incorrectos (CRLF), espacios extra o está mal copiado | Ver [Solución: Error libcrypto con EC2_SSH_KEY](#solución-error-libcrypto-con-ec2_ssh_key) más abajo. |
-| SSH: Permission denied | Clave incorrecta, usuario o permisos del `.pem` | Verificar secret `EC2_SSH_KEY` (todo el contenido del .pem, incl. header/footer). Comprobar `EC2_USER` y que la clave esté asociada a la instancia. |
+| **Error loading key "...": error in libcrypto** | El contenido de `AWS_ACCESS_KEY` (el .pem) tiene saltos de línea incorrectos (CRLF), espacios extra o está mal copiado | Ver [Solución: Error libcrypto con AWS_ACCESS_KEY](#solución-error-libcrypto-con-ec2_ssh_key) más abajo. |
+| SSH: Permission denied | Clave incorrecta, usuario o permisos del `.pem` | Verificar secret `AWS_ACCESS_KEY` (todo el contenido del .pem, incl. header/footer). Comprobar `EC2_USER` y que la clave esté asociada a la instancia. |
 | Host key verification failed | Host no en `known_hosts` | El workflow ya ejecuta `ssh-keyscan`; si usas proxy o saltos, revisar conectividad. |
 | rsync or SSH timeout | Firewall, security group, IP incorrecta | Abrir puerto 22 al IP del runner de GitHub (o usar self-hosted runner). Ver [GitHub IP ranges](https://api.github.com/meta). |
 | Health check timeout | App no responde en 30s o URL incorrecta | Aumentar espera o reintentos; definir `HEALTH_CHECK_URL` si la app está detrás de Nginx (puerto 80/443). |
 | PM2 not found | PM2 no instalado en EC2 | Instalar: `npm i -g pm2` y asegurar que esté en el PATH del usuario de deploy. |
 
-#### Solución: Error libcrypto con EC2_SSH_KEY
+#### Solución: Error libcrypto con AWS_ACCESS_KEY (contenido del .pem)
 
-Si el step **Setup SSH** falla con `Error loading key "...": error in libcrypto`, la clave privada en el secret está mal formateada (saltos de línea Windows, truncada o con caracteres extra). Sigue estos pasos:
+Si el step **Setup SSH** falla con `Error loading key "...": error in libcrypto`, la clave privada en el secret **AWS_ACCESS_KEY** está mal formateada (saltos de línea Windows, truncada o con caracteres extra). Sigue estos pasos:
 
 1. **Obtener el contenido correcto del `.pem`** (en tu máquina, donde tienes el archivo):
    ```bash
@@ -289,7 +289,7 @@ Si el step **Setup SSH** falla con `Error loading key "...": error in libcrypto`
 
 4. **Actualizar el secret en GitHub**:
    - Repositorio → **Settings** → **Secrets and variables** → **Actions**.
-   - Localiza **EC2_SSH_KEY** → **Update**.
+   - Localiza **AWS_ACCESS_KEY** (según README, aquí va el contenido del .pem) → **Update**.
    - Pega **solo** el contenido del `.pem` (nada antes de `-----BEGIN` ni después de `-----END`).
    - Guarda.
 
@@ -328,8 +328,8 @@ El pipeline también normaliza la clave al escribirla (quita `\r` y ajusta salto
 | Secret | Descripción | Cómo obtenerlo | Ejemplo |
 |--------|-------------|----------------|---------|
 | **EC2_INSTANCE** | IP pública o DNS del servidor EC2 | En AWS: EC2 → Instancias → IPv4 pública; o dominio apuntando a esa IP | `3.12.34.56` o `api.midominio.com` |
-| **EC2_USER** | Usuario SSH para conectarse a la instancia | Depende del SO: Amazon Linux → `ec2-user`; Ubuntu → `ubuntu` | `ec2-user` |
-| **EC2_SSH_KEY** | Contenido del archivo de clave privada `.pem` | Al crear la instancia EC2 (par de claves) o desde la consola AWS; copiar **todo** el archivo | `-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----` |
+| **EC2_USER** | Usuario SSH (opcional) | Si no se define, el pipeline usa `ec2-user`. Amazon Linux → `ec2-user`; Ubuntu → `ubuntu` | `ec2-user` |
+| **AWS_ACCESS_KEY** | Contenido del archivo de clave privada `.pem` | Según README: aquí se coloca el contenido completo del .pem para el deploy por SSH | `-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----` |
 | **AWS_ACCESS_ID** | (Opcional) ID de clave de acceso AWS | IAM → Usuarios → Claves de acceso. **No se usa** en el deploy por SSH de este pipeline | — |
 | **AWS_ACCESS_KEY** | (Opcional) Clave secreta AWS | Misma clave que el ID anterior. **No se usa** en el deploy por SSH | — |
 | **HEALTH_CHECK_URL** | (Opcional) URL para el health check tras el deploy | URL pública de la app (raíz o endpoint tipo `/api/health`) | `https://api.midominio.com/` o `https://api.midominio.com/api/health` |
@@ -347,7 +347,7 @@ Cómo añadirlos en GitHub:
 ### Requisitos del servidor
 
 - **Sistema operativo**: Amazon Linux 2023 o Ubuntu 22.04 LTS.
-- **Acceso**: SSH con clave (el mismo `.pem` que guardas en `EC2_SSH_KEY`).
+- **Acceso**: SSH con clave (el mismo `.pem` cuyo contenido guardas en el secret **AWS_ACCESS_KEY**).
 - **Seguridad**: Security group con puerto 22 (SSH) permitido desde los [IP ranges de GitHub](https://api.github.com/meta) o desde tu IP; puerto 3000 (o 80/443 si usas Nginx) según tu diseño.
 
 ### Software necesario
@@ -455,8 +455,8 @@ sudo nginx -t && sudo systemctl reload nginx
 ### Deploy falla por SSH
 
 - **Permission denied (publickey)**  
-  - Comprobar que el secret `EC2_SSH_KEY` contiene **todo** el contenido del `.pem`, incluyendo las líneas `-----BEGIN ...` y `-----END ...`.  
-  - Verificar que la clave está asociada a la instancia EC2 y que `EC2_USER` es el correcto para el SO.
+  - Comprobar que el secret **AWS_ACCESS_KEY** contiene **todo** el contenido del `.pem`, incluyendo las líneas `-----BEGIN ...` y `-----END ...`.  
+  - Verificar que la clave está asociada a la instancia EC2 y que `EC2_USER` (o el valor por defecto `ec2-user`) es el correcto para el SO.
 
 - **Host key verification failed**  
   - El workflow ya añade el host con `ssh-keyscan`. Si falla, revisar que `EC2_INSTANCE` sea resoluble y que el puerto 22 esté abierto.
@@ -512,8 +512,8 @@ No subir nunca claves ni datos sensibles al repositorio; solo referenciarlos com
 
 ### Cómo modificar la configuración de EC2
 
-- **Ruta de la app**: En el workflow, la ruta se construye con `secrets.EC2_USER` (ej. `/home/ec2-user/app`). Para otra ruta, habría que parametrizar (variable de entorno o secret) y usarla en los pasos de deploy.
-- **Usuario o host**: Cambiar los secrets `EC2_USER` y `EC2_INSTANCE`; no es necesario tocar el código del pipeline si todo se expone por secrets.
+- **Ruta de la app**: En el workflow, la ruta se construye con `EC2_USER` (por defecto `ec2-user`, ej. `/home/ec2-user/app`). Para otra ruta, habría que parametrizar (variable de entorno o secret) y usarla en los pasos de deploy.
+- **Usuario o host**: Cambiar los secrets `EC2_USER` (opcional) y `EC2_INSTANCE`; no es necesario tocar el código del pipeline si todo se expone por secrets.
 - **PM2**: El archivo `backend/ecosystem.config.js` se incluye en el artifact; para cambiar nombre de app, instancias o rutas de logs, editar ese archivo en el repo y volver a desplegar.
 
 ---

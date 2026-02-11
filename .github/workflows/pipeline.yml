@@ -251,8 +251,8 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
 
-    # Secrets: EC2_INSTANCE (IP/DNS), EC2_USER (ec2-user|ubuntu), EC2_SSH_KEY (contenido .pem)
-    # Opcional: AWS_ACCESS_ID, AWS_ACCESS_KEY (no se usan en este deploy por SSH)
+    # Secrets según README: AWS_ACCESS_ID, AWS_ACCESS_KEY (contenido del .pem), EC2_INSTANCE
+    # EC2_USER opcional: si no se define, se usa 'ec2-user'
     outputs:
       deploy_version: ${{ needs.build.outputs.build_version }}
       deploy_url: https://deploy-target
@@ -264,7 +264,8 @@ jobs:
     env:
       NODE_ENV: production
       SSH_KEY_PATH: ~/.ssh/deploy_key.pem
-      APP_DIR: /home/${{ secrets.EC2_USER }}/app
+      EC2_USER: ${{ secrets.EC2_USER || 'ec2-user' }}
+      APP_DIR: ${{ format('/home/{0}/app', secrets.EC2_USER || 'ec2-user') }}
 
     steps:
       - name: 📥 Download build artifact
@@ -282,8 +283,8 @@ jobs:
       - name: 🔑 Setup SSH
         run: |
           mkdir -p ~/.ssh
-          # Normalizar clave PEM: quitar \r (CRLF) y asegurar una sola línea final
-          echo "${{ secrets.EC2_SSH_KEY }}" | sed 's/\r$//' | tee ${{ env.SSH_KEY_PATH }} > /dev/null
+          # Contenido del .pem según README: secret AWS_ACCESS_KEY. Normalizar CRLF.
+          echo "${{ secrets.AWS_ACCESS_KEY }}" | sed 's/\r$//' | tee ${{ env.SSH_KEY_PATH }} > /dev/null
           chmod 600 ${{ env.SSH_KEY_PATH }}
           ssh-keyscan -H ${{ secrets.EC2_INSTANCE }} >> ~/.ssh/known_hosts 2>/dev/null || true
           eval "$(ssh-agent -s)"
@@ -292,7 +293,7 @@ jobs:
       - name: 💾 Create backup on EC2
         run: |
           SSH_OPTS="-i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no"
-          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
+          ssh $SSH_OPTS ${{ env.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
             set -e
             APP_DIR='${{ env.APP_DIR }}'
             if [ -d \"\$APP_DIR\" ] && [ \"\$(ls -A \$APP_DIR 2>/dev/null)\" ]; then
@@ -307,15 +308,15 @@ jobs:
       - name: 📤 Transfer files to EC2
         run: |
           ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "mkdir -p ${{ env.APP_DIR }}-new"
+            ${{ env.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "mkdir -p ${{ env.APP_DIR }}-new"
           rsync -avz --delete \
             -e "ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no" \
-            backend-deploy/ ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }}:${{ env.APP_DIR }}-new/
+            backend-deploy/ ${{ env.EC2_USER }}@${{ secrets.EC2_INSTANCE }}:${{ env.APP_DIR }}-new/
 
       - name: 🚀 Deploy on EC2 (PM2)
         run: |
           ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
+            ${{ env.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
             set -e
             APP_DIR='${{ env.APP_DIR }}'
             pm2 stop all || true
@@ -356,7 +357,7 @@ jobs:
         if: failure()
         run: |
           ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
+            ${{ env.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
             set -e
             APP_DIR='${{ env.APP_DIR }}'
             if [ -d \"\${APP_DIR}.old\" ]; then
