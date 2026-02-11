@@ -194,7 +194,7 @@ jobs:
           };
           require('fs').writeFileSync('tsconfig.build.json', JSON.stringify(build, null, 2));
           "
-          npx tsc -p tsconfig.build.json
+          ./node_modules/.bin/tsc -p tsconfig.build.json
           rm -f tsconfig.build.json
 
       - name: 📝 Generate build info
