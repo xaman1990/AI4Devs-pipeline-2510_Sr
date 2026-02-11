@@ -299,10 +299,27 @@ jobs:
 
       - name: 💾 Create backup on EC2
         run: |
-          SSH_KEY="${{ env.SSH_KEY_PATH }}"
-          EC2_USER="${{ env.EC2_USER }}"
-          EC2_HOST="${{ secrets.EC2_INSTANCE }}"
-          APP_DIR="${{ env.APP_DIR }}"
+          # Expandir ~ a $HOME y limpiar espacios
+          SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
+          SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
+          EC2_USER_RAW="${{ env.EC2_USER }}"
+          EC2_USER=$(echo "$EC2_USER_RAW" | xargs)  # Trim espacios
+          EC2_HOST_RAW="${{ secrets.EC2_INSTANCE }}"
+          EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)  # Trim espacios
+          APP_DIR_RAW="${{ env.APP_DIR }}"
+          APP_DIR=$(echo "$APP_DIR_RAW" | xargs)  # Trim espacios
+          
+          # Verificar que la clave existe y tiene permisos correctos
+          if [ ! -f "$SSH_KEY" ]; then
+            echo "::error::La clave SSH no existe en: $SSH_KEY"
+            exit 1
+          fi
+          if [ ! -s "$SSH_KEY" ]; then
+            echo "::error::La clave SSH está vacía: $SSH_KEY"
+            exit 1
+          fi
+          
+          echo "Conectando a ${EC2_USER}@${EC2_HOST}"
           ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
             "${EC2_USER}@${EC2_HOST}" "
             set -e
@@ -318,10 +335,16 @@ jobs:
 
       - name: 📤 Transfer files to EC2
         run: |
-          SSH_KEY="${{ env.SSH_KEY_PATH }}"
-          EC2_USER="${{ env.EC2_USER }}"
-          EC2_HOST="${{ secrets.EC2_INSTANCE }}"
-          APP_DIR="${{ env.APP_DIR }}"
+          # Expandir ~ a $HOME y limpiar espacios
+          SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
+          SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
+          EC2_USER_RAW="${{ env.EC2_USER }}"
+          EC2_USER=$(echo "$EC2_USER_RAW" | xargs)  # Trim espacios
+          EC2_HOST_RAW="${{ secrets.EC2_INSTANCE }}"
+          EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)  # Trim espacios
+          APP_DIR_RAW="${{ env.APP_DIR }}"
+          APP_DIR=$(echo "$APP_DIR_RAW" | xargs)  # Trim espacios
+          
           ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
             "${EC2_USER}@${EC2_HOST}" "mkdir -p ${APP_DIR}-new"
           rsync -avz --delete \
@@ -330,10 +353,16 @@ jobs:
 
       - name: 🚀 Deploy on EC2 (PM2)
         run: |
-          SSH_KEY="${{ env.SSH_KEY_PATH }}"
-          EC2_USER="${{ env.EC2_USER }}"
-          EC2_HOST="${{ secrets.EC2_INSTANCE }}"
-          APP_DIR="${{ env.APP_DIR }}"
+          # Expandir ~ a $HOME y limpiar espacios
+          SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
+          SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
+          EC2_USER_RAW="${{ env.EC2_USER }}"
+          EC2_USER=$(echo "$EC2_USER_RAW" | xargs)  # Trim espacios
+          EC2_HOST_RAW="${{ secrets.EC2_INSTANCE }}"
+          EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)  # Trim espacios
+          APP_DIR_RAW="${{ env.APP_DIR }}"
+          APP_DIR=$(echo "$APP_DIR_RAW" | xargs)  # Trim espacios
+          
           ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
             "${EC2_USER}@${EC2_HOST}" "
             set -e
@@ -375,10 +404,16 @@ jobs:
       - name: 🔄 Rollback on failure
         if: failure()
         run: |
-          SSH_KEY="${{ env.SSH_KEY_PATH }}"
-          EC2_USER="${{ env.EC2_USER }}"
-          EC2_HOST="${{ secrets.EC2_INSTANCE }}"
-          APP_DIR="${{ env.APP_DIR }}"
+          # Expandir ~ a $HOME y limpiar espacios
+          SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
+          SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
+          EC2_USER_RAW="${{ env.EC2_USER }}"
+          EC2_USER=$(echo "$EC2_USER_RAW" | xargs)  # Trim espacios
+          EC2_HOST_RAW="${{ secrets.EC2_INSTANCE }}"
+          EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)  # Trim espacios
+          APP_DIR_RAW="${{ env.APP_DIR }}"
+          APP_DIR=$(echo "$APP_DIR_RAW" | xargs)  # Trim espacios
+          
           ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
             "${EC2_USER}@${EC2_HOST}" "
             set -e
