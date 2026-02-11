@@ -1,0 +1,418 @@
+# =============================================================================
+# 🚀 CI/CD Pipeline - Node.js + Express + MySQL | Deploy EC2 + PM2
+# =============================================================================
+# Pipeline completo: test → build → deploy (PR a main) → resumen.
+# Triggers: push a ramas (excepto main) y pull_request hacia main.
+# =============================================================================
+
+name: 🚀 CI/CD Pipeline
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+# Cancelar ejecuciones previas de la misma rama (optimización y ahorro de minutos)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Mínimos necesarios: leer repo, comentar en PRs; id-token para OIDC si usas AWS
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+# Variables globales (Node 18.x según contexto del proyecto)
+env:
+  NODE_VERSION: "18.x"
+  APP_NAME: "mi-backend"
+  UBUNTU_VERSION: "ubuntu-latest"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job: test — Pruebas con Jest, MySQL 8.0 y coverage mínimo 70%
+  # ---------------------------------------------------------------------------
+  test:
+    name: 🧪 Run Tests
+    runs-on: ${{ env.UBUNTU_VERSION }}
+
+    outputs:
+      coverage_percentage: ${{ steps.coverage-out.outputs.percentage }}
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: test_db
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      NODE_ENV: test
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: root
+      DB_NAME: test_db
+      DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_db
+      JWT_SECRET: test-secret-key
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: 📦 Install root dependencies
+        run: npm ci
+        working-directory: .
+
+      - name: 📦 Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: 🔍 Run linter
+        run: npx eslint . --max-warnings 0
+        working-directory: backend
+        continue-on-error: true
+
+      - name: 🧪 Run tests with coverage
+        run: npm run test:coverage
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: root
+          DB_NAME: test_db
+          DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_db
+          JWT_SECRET: test-secret-key
+
+      - name: 📊 Set coverage output
+        id: coverage-out
+        working-directory: backend
+        run: |
+          if [ -f coverage/coverage-summary.json ]; then
+            PCT=$(node -p "try { require('./coverage/coverage-summary.json').total.lines.pct } catch(e) { 0 }")
+            echo "percentage=${PCT:-0}" >> $GITHUB_OUTPUT
+          else
+            echo "percentage=0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 📤 Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: backend/coverage/
+          retention-days: 7
+
+      - name: 💬 Comment coverage on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'backend/coverage/coverage-summary.json';
+            const marker = '<!-- coverage-report -->';
+            if (!fs.existsSync(path)) return;
+            const summary = JSON.parse(fs.readFileSync(path, 'utf8'));
+            const total = summary.total || {};
+            const pct = (k) => (total[k] && total[k].pct != null) ? total[k].pct : '-';
+            const body = `## 📊 Coverage Report ${marker}\n\n| Líneas | Funciones | Ramas | Statements |\n|--------|-----------|-------|------------|\n| ${pct('lines')}% | ${pct('functions')}% | ${pct('branches')}% | ${pct('statements')}% |\n`;
+            const { data: comments } = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
+            const existing = comments.find(c => c.user.type === 'Bot' && c.body && c.body.includes(marker));
+            if (existing) await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+            else await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+        continue-on-error: true
+
+  # ---------------------------------------------------------------------------
+  # Job: build — Compilar y empaquetar para producción (EC2)
+  # ---------------------------------------------------------------------------
+  build:
+    name: 🏗️ Build Application
+    needs: test
+    runs-on: ${{ env.UBUNTU_VERSION }}
+
+    outputs:
+      build_version: ${{ steps.build-info.outputs.version }}
+      artifact_name: deploy-package
+
+    env:
+      NODE_ENV: production
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: 📦 Install dependencies (build)
+        run: npm ci
+        working-directory: backend
+
+      - name: 🔧 Prisma generate
+        run: npx prisma generate
+        working-directory: backend
+
+      - name: 📜 Compile TypeScript
+        run: npm run build
+        working-directory: backend
+
+      - name: 📝 Generate build info
+        id: build-info
+        working-directory: backend
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          node -e "
+            const pkg = require('./package.json');
+            const info = {
+              version: pkg.version,
+              commit: process.env.GITHUB_SHA || '',
+              branch: process.env.GITHUB_REF_NAME || '',
+              buildTime: new Date().toISOString(),
+              buildNumber: process.env.GITHUB_RUN_NUMBER || ''
+            };
+            require('fs').writeFileSync('build-info.json', JSON.stringify(info, null, 2));
+          "
+
+      - name: 📦 Create deployment package
+        working-directory: backend
+        run: |
+          mkdir -p deploy-package
+          cp -r dist deploy-package/
+          cp -r prisma deploy-package/
+          cp package.json package-lock.json deploy-package/
+          cp ecosystem.config.js deploy-package/ 2>/dev/null || true
+          cp .env.example deploy-package/ 2>/dev/null || true
+          cp build-info.json deploy-package/
+          cd deploy-package && npm ci --production --ignore-scripts
+          cd ..
+
+      - name: 🗜️ Compress deployment package
+        working-directory: backend
+        run: |
+          tar czf deploy-package.tar.gz deploy-package
+          du -sh deploy-package.tar.gz
+
+      - name: 📤 Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-package
+          path: backend/deploy-package.tar.gz
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Job: deploy — Desplegar a EC2 (solo en PR hacia main)
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: 🚀 Deploy to EC2
+    needs: build
+    runs-on: ${{ env.UBUNTU_VERSION }}
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+
+    outputs:
+      deploy_version: ${{ needs.build.outputs.build_version }}
+      deploy_url: https://${{ secrets.EC2_HOST }}
+
+    environment:
+      name: production
+      url: https://${{ secrets.EC2_HOST }}
+
+    env:
+      NODE_ENV: production
+      SSH_KEY_PATH: ~/.ssh/deploy_key.pem
+      APP_DIR: /home/${{ secrets.EC2_USER }}/app
+
+    steps:
+      - name: 📥 Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-package
+
+      - name: 📦 Extract deployment package
+        run: |
+          TARBALL=$(find . -name 'deploy-package.tar.gz' -type f | head -1)
+          tar xzf "$TARBALL"
+          mv deploy-package backend-deploy
+          ls -la backend-deploy/
+
+      - name: 🔑 Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ${{ env.SSH_KEY_PATH }}
+          chmod 600 ${{ env.SSH_KEY_PATH }}
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          eval "$(ssh-agent -s)"
+          ssh-add ${{ env.SSH_KEY_PATH }}
+
+      - name: 💾 Create backup on EC2
+        run: |
+          SSH_OPTS="-i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no"
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+            set -e
+            APP_DIR='${{ env.APP_DIR }}'
+            if [ -d \"\$APP_DIR\" ] && [ \"\$(ls -A \$APP_DIR 2>/dev/null)\" ]; then
+              BACKUP=\${APP_DIR}-backup-\$(date +%Y%m%d%H%M%S)
+              cp -a \"\$APP_DIR\" \"\$BACKUP\"
+              echo \"Backup creado: \$BACKUP\"
+            else
+              echo 'No había app previa'
+            fi
+          "
+
+      - name: 📤 Transfer files to EC2
+        run: |
+          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "mkdir -p ${{ env.APP_DIR }}-new"
+          rsync -avz --delete \
+            -e "ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no" \
+            backend-deploy/ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ env.APP_DIR }}-new/
+
+      - name: 🚀 Deploy on EC2 (PM2)
+        run: |
+          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+            set -e
+            APP_DIR='${{ env.APP_DIR }}'
+            pm2 stop all || true
+            if [ -d \"\$APP_DIR\" ] && [ \"\$(ls -A \$APP_DIR 2>/dev/null)\" ]; then
+              rm -rf \"\${APP_DIR}.old\"
+              mv \"\$APP_DIR\" \"\${APP_DIR}.old\"
+            fi
+            mv \"\${APP_DIR}-new\" \"\$APP_DIR\"
+            cd \"\$APP_DIR\"
+            pm2 start ecosystem.config.js
+            pm2 save
+            pm2 list
+          "
+
+      - name: ⏳ Wait for application
+        run: sleep 30
+
+      - name: ✅ Health check
+        id: health
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
+        run: |
+          URL="${HEALTH_CHECK_URL:-http://$EC2_HOST:3000/}"
+          for i in 1 2 3; do
+            if curl -sf --max-time 10 "$URL" > /dev/null || curl -sf --max-time 10 "${URL%/}/api/health" > /dev/null; then
+              echo "Health check OK (intento $i)"
+              echo "ok=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "Intento $i fallido, reintentando en 10s..."
+            sleep 10
+          done
+          echo "ok=false" >> $GITHUB_OUTPUT
+          exit 1
+
+      - name: 🔄 Rollback on failure
+        if: failure()
+        run: |
+          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+            set -e
+            APP_DIR='${{ env.APP_DIR }}'
+            if [ -d \"\${APP_DIR}.old\" ]; then
+              pm2 stop all || true
+              rm -rf \"\$APP_DIR\"
+              mv \"\${APP_DIR}.old\" \"\$APP_DIR\"
+              cd \"\$APP_DIR\"
+              pm2 start ecosystem.config.js
+              pm2 save
+              echo 'Rollback completado'
+            else
+              echo 'No hay backup para rollback'
+            fi
+          "
+
+      - name: 💬 Notify PR (success)
+        if: success() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '## 🚀 Deploy completado\n\nDespliegue a EC2 finalizado correctamente. Health check OK.'
+            });
+
+      - name: 💬 Notify PR (failure)
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '## ❌ Deploy fallido\n\nEl despliegue falló. Se ejecutó rollback automático si había backup disponible.'
+            });
+
+  # ---------------------------------------------------------------------------
+  # Job: summary — Resumen del workflow (estado, coverage, versión, URL)
+  # Se ejecuta siempre que test y build hayan terminado (éxito o fallo).
+  # Deploy solo se ejecuta en PR a main; en ese caso ver el comentario en el PR.
+  # ---------------------------------------------------------------------------
+  summary:
+    name: 📋 Workflow Summary
+    runs-on: ${{ env.UBUNTU_VERSION }}
+    needs: [test, build]
+    if: always() && (needs.test.result == 'success' || needs.test.result == 'failure') && (needs.build.result == 'success' || needs.build.result == 'failure')
+
+    steps:
+      - name: 📋 Write summary
+        run: |
+          COVERAGE="${{ needs.test.outputs.coverage_percentage }}"
+          VERSION="${{ needs.build.outputs.build_version }}"
+          ARTIFACT="${{ needs.build.outputs.artifact_name }}"
+
+          TEST_ICON="${{ needs.test.result == 'success' && '✅' || '❌' }}"
+          BUILD_ICON="${{ needs.build.result == 'success' && '✅' || '❌' }}"
+
+          {
+            echo "## 🚀 Resumen del Pipeline — ${{ env.APP_NAME }}"
+            echo ""
+            echo "| Job    | Estado   |"
+            echo "|--------|----------|"
+            echo "| test   | $TEST_ICON ${{ needs.test.result }} |"
+            echo "| build  | $BUILD_ICON ${{ needs.build.result }} |"
+            echo "| deploy | ⏭️ Solo en PR hacia \`main\` |"
+            echo ""
+            echo "### 📊 Coverage de tests"
+            echo "- **Porcentaje (líneas):** ${COVERAGE:-N/A}%"
+            echo ""
+            echo "### 📦 Build"
+            echo "- **Versión:** ${VERSION:-N/A}"
+            echo "- **Artifact:** ${ARTIFACT:-N/A}"
+            echo ""
+            echo "### 🌐 Servidor"
+            echo "- **URL:** Configurada en secret \`EC2_HOST\` (deploy en PR a main)."
+          } >> $GITHUB_STEP_SUMMARY
