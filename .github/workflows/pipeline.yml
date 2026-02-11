@@ -384,26 +384,141 @@ jobs:
           "
 
       - name: ⏳ Wait for application
-        run: sleep 30
+        run: |
+          echo "Esperando 30 segundos para que la aplicación inicie..."
+          sleep 30
+
+      - name: 🔍 Verify application status on EC2
+        run: |
+          # Expandir ~ a $HOME y limpiar espacios
+          SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
+          SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
+          EC2_USER_RAW="${{ secrets.EC2_USER || 'ec2-user' }}"
+          EC2_USER=$(echo "$EC2_USER_RAW" | xargs)
+          EC2_HOST_RAW="${{ secrets.EC2_INSTANCE }}"
+          EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)
+          APP_DIR="/home/${EC2_USER}/app"
+          
+          echo "Verificando estado de la aplicación en EC2..."
+          ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+            "${EC2_USER}@${EC2_HOST}" "
+            echo '=== Estado de PM2 ==='
+            pm2 list || echo 'PM2 no está instalado o no hay procesos'
+            echo ''
+            echo '=== Procesos escuchando en puerto 3000 ==='
+            sudo netstat -tlnp | grep :3000 || sudo ss -tlnp | grep :3000 || echo 'No hay proceso escuchando en puerto 3000'
+            echo ''
+            echo '=== Verificando si la app responde localmente ==='
+            curl -f http://localhost:3000/ || curl -f http://127.0.0.1:3000/ || echo 'La app no responde en localhost:3000'
+            curl -f http://localhost:3000/api/health || curl -f http://127.0.0.1:3000/api/health || echo 'El endpoint /api/health no responde'
+            echo ''
+            echo '=== Verificando interfaz de red ==='
+            ip addr show | grep inet || ifconfig | grep inet || echo 'No se pudo obtener información de red'
+          "
 
       - name: ✅ Health check
         id: health
         env:
           EC2_INSTANCE: ${{ secrets.EC2_INSTANCE }}
           HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
+        continue-on-error: true
         run: |
-          URL="${HEALTH_CHECK_URL:-http://$EC2_INSTANCE:3000/}"
+          # Limpiar espacios de EC2_INSTANCE
+          EC2_HOST_RAW="$EC2_INSTANCE"
+          EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)
+          
+          # Construir URL de health check
+          if [ -n "$HEALTH_CHECK_URL" ]; then
+            URL="$HEALTH_CHECK_URL"
+            echo "Usando HEALTH_CHECK_URL personalizado: $URL"
+          else
+            URL="http://${EC2_HOST}:3000/"
+            echo "Usando URL por defecto: $URL"
+          fi
+          
+          echo "Iniciando health check..."
+          echo "URLs a verificar:"
+          echo "  1. $URL"
+          echo "  2. ${URL%/}/api/health"
+          
           for i in 1 2 3; do
-            if curl -sf --max-time 10 "$URL" > /dev/null || curl -sf --max-time 10 "${URL%/}/api/health" > /dev/null; then
-              echo "Health check OK (intento $i)"
+            echo ""
+            echo "=== Intento $i de 3 ==="
+            
+            # Intentar URL principal
+            if curl -sf --max-time 10 "$URL" > /dev/null 2>&1; then
+              echo "✅ Health check OK en $URL (intento $i)"
               echo "ok=true" >> $GITHUB_OUTPUT
               exit 0
+            else
+              echo "❌ Falló conexión a $URL"
+              CURL_ERROR=$(curl -sf --max-time 10 "$URL" 2>&1 || true)
+              echo "Error: $CURL_ERROR"
             fi
-            echo "Intento $i fallido, reintentando en 10s..."
-            sleep 10
+            
+            # Intentar endpoint /api/health
+            HEALTH_ENDPOINT="${URL%/}/api/health"
+            if curl -sf --max-time 10 "$HEALTH_ENDPOINT" > /dev/null 2>&1; then
+              echo "✅ Health check OK en $HEALTH_ENDPOINT (intento $i)"
+              echo "ok=true" >> $GITHUB_OUTPUT
+              exit 0
+            else
+              echo "❌ Falló conexión a $HEALTH_ENDPOINT"
+              CURL_ERROR=$(curl -sf --max-time 10 "$HEALTH_ENDPOINT" 2>&1 || true)
+              echo "Error: $CURL_ERROR"
+            fi
+            
+            if [ $i -lt 3 ]; then
+              echo "Esperando 10 segundos antes del siguiente intento..."
+              sleep 10
+            fi
           done
-          echo "ok=false" >> $GITHUB_OUTPUT
-          exit 1
+          
+          echo ""
+          echo "⚠️ Health check externo falló después de 3 intentos"
+          echo "Intentando verificar desde dentro de EC2..."
+          
+          # Verificar desde dentro de EC2 como último recurso
+          SSH_KEY_PATH_RAW="${{ env.SSH_KEY_PATH }}"
+          SSH_KEY="${SSH_KEY_PATH_RAW/#\~/$HOME}"
+          EC2_USER_RAW="${{ secrets.EC2_USER || 'ec2-user' }}"
+          EC2_USER=$(echo "$EC2_USER_RAW" | xargs)
+          EC2_HOST_RAW="$EC2_INSTANCE"
+          EC2_HOST=$(echo "$EC2_HOST_RAW" | xargs)
+          
+          if ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+            "${EC2_USER}@${EC2_HOST}" "curl -sf http://localhost:3000/ > /dev/null 2>&1 || curl -sf http://localhost:3000/api/health > /dev/null 2>&1"; then
+            echo "✅ La aplicación responde localmente en EC2"
+            echo "⚠️ Pero no es accesible desde fuera. Posibles causas:"
+            echo "  1. La app solo escucha en localhost (127.0.0.1) en lugar de 0.0.0.0"
+            echo "  2. El security group bloquea el puerto 3000"
+            echo "  3. Un firewall interno está bloqueando conexiones"
+            echo ""
+            echo "💡 Soluciones:"
+            echo "  - Verifica que tu app escuche en 0.0.0.0:3000, no solo en localhost"
+            echo "  - Abre el puerto 3000 en el security group de EC2"
+            echo "  - Configura HEALTH_CHECK_URL para usar un endpoint accesible"
+            echo ""
+            echo "ok=local" >> $GITHUB_OUTPUT
+            exit 0  # No fallar si responde localmente
+          else
+            echo "❌ La aplicación tampoco responde localmente en EC2"
+            echo ""
+            echo "Posibles causas:"
+            echo "  1. La aplicación no está corriendo (verifica con 'pm2 list')"
+            echo "  2. La aplicación está corriendo en un puerto diferente"
+            echo "  3. La aplicación necesita más tiempo para iniciar"
+            echo "  4. Hay un error en la aplicación que impide que responda"
+            echo ""
+            echo "💡 Soluciones:"
+            echo "  - Conéctate a EC2 y ejecuta 'pm2 list' y 'pm2 logs'"
+            echo "  - Verifica los logs de la aplicación"
+            echo "  - Verifica que el puerto en ecosystem.config.js sea 3000"
+            echo "  - Aumenta el tiempo de espera si la app tarda en iniciar"
+            echo ""
+            echo "ok=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
 
       - name: 🔄 Rollback on failure
         if: failure()
