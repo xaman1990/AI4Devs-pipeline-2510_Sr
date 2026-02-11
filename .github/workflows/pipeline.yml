@@ -299,10 +299,14 @@ jobs:
 
       - name: 💾 Create backup on EC2
         run: |
-          SSH_OPTS="-i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no"
-          ssh $SSH_OPTS ${{ env.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
+          SSH_KEY="${{ env.SSH_KEY_PATH }}"
+          EC2_USER="${{ env.EC2_USER }}"
+          EC2_HOST="${{ secrets.EC2_INSTANCE }}"
+          APP_DIR="${{ env.APP_DIR }}"
+          ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+            "${EC2_USER}@${EC2_HOST}" "
             set -e
-            APP_DIR='${{ env.APP_DIR }}'
+            APP_DIR='${APP_DIR}'
             if [ -d \"\$APP_DIR\" ] && [ \"\$(ls -A \$APP_DIR 2>/dev/null)\" ]; then
               BACKUP=\${APP_DIR}-backup-\$(date +%Y%m%d%H%M%S)
               cp -a \"\$APP_DIR\" \"\$BACKUP\"
@@ -314,18 +318,26 @@ jobs:
 
       - name: 📤 Transfer files to EC2
         run: |
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ env.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "mkdir -p ${{ env.APP_DIR }}-new"
+          SSH_KEY="${{ env.SSH_KEY_PATH }}"
+          EC2_USER="${{ env.EC2_USER }}"
+          EC2_HOST="${{ secrets.EC2_INSTANCE }}"
+          APP_DIR="${{ env.APP_DIR }}"
+          ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+            "${EC2_USER}@${EC2_HOST}" "mkdir -p ${APP_DIR}-new"
           rsync -avz --delete \
-            -e "ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no" \
-            backend-deploy/ ${{ env.EC2_USER }}@${{ secrets.EC2_INSTANCE }}:${{ env.APP_DIR }}-new/
+            -e "ssh -i $SSH_KEY -o StrictHostKeyChecking=no" \
+            backend-deploy/ "${EC2_USER}@${EC2_HOST}:${APP_DIR}-new/"
 
       - name: 🚀 Deploy on EC2 (PM2)
         run: |
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ env.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
+          SSH_KEY="${{ env.SSH_KEY_PATH }}"
+          EC2_USER="${{ env.EC2_USER }}"
+          EC2_HOST="${{ secrets.EC2_INSTANCE }}"
+          APP_DIR="${{ env.APP_DIR }}"
+          ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+            "${EC2_USER}@${EC2_HOST}" "
             set -e
-            APP_DIR='${{ env.APP_DIR }}'
+            APP_DIR='${APP_DIR}'
             pm2 stop all || true
             if [ -d \"\$APP_DIR\" ] && [ \"\$(ls -A \$APP_DIR 2>/dev/null)\" ]; then
               rm -rf \"\${APP_DIR}.old\"
@@ -363,10 +375,14 @@ jobs:
       - name: 🔄 Rollback on failure
         if: failure()
         run: |
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
-            ${{ env.EC2_USER }}@${{ secrets.EC2_INSTANCE }} "
+          SSH_KEY="${{ env.SSH_KEY_PATH }}"
+          EC2_USER="${{ env.EC2_USER }}"
+          EC2_HOST="${{ secrets.EC2_INSTANCE }}"
+          APP_DIR="${{ env.APP_DIR }}"
+          ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+            "${EC2_USER}@${EC2_HOST}" "
             set -e
-            APP_DIR='${{ env.APP_DIR }}'
+            APP_DIR='${APP_DIR}'
             if [ -d \"\${APP_DIR}.old\" ]; then
               pm2 stop all || true
               rm -rf \"\$APP_DIR\"
